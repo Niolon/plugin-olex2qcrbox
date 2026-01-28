@@ -10,10 +10,14 @@ import gui
 import httpx
 import io
 import sys
+import json
+import re
+import threading
+import time
+import webbrowser
 from textwrap import dedent
 
 from pathlib import Path
-import time
 
 debug = bool(OV.GetParam("olex2.debug", False))
 
@@ -47,6 +51,7 @@ OV.SetVar('olex2qcrbox_plugin_path', p_path)
 from PluginTools import PluginTools as PT
 import inspect
 import importlib
+import traceback
 
 from qcrbox_plugin import (
     QCrBoxAPIAdapter,
@@ -54,6 +59,13 @@ from qcrbox_plugin import (
     CalculationStatus,
     CommandExecution,
     UploadedDataset,
+    PluginState,
+    GUIController,
+    SessionManager,
+    CalculationRunner,
+    convert_cif_ddl2_to_ddl1,
+    extract_cif_from_json_response,
+    tests,
 )
 
 # Force reload of html_templates to pick up changes
@@ -95,31 +107,31 @@ class olex2qcrbox(PT):
     self.qcrbox_url = OV.GetParam("olex2.qcrbox_url", "http://localhost:11000")
     self.qcrbox_adapter = QCrBoxAPIAdapter(base_url=self.qcrbox_url)
     
+    # Initialize plugin state
+    self.state = PluginState()
+    
+    # Initialize GUI controller
+    self.gui = GUIController(OV, olx)
+    
+    # Initialize session manager
+    self.session_manager = SessionManager(
+        self.qcrbox_adapter.client, 
+        self.qcrbox_url
+    )
+    
+    # Initialize calculation runner
+    self.calc_runner = CalculationRunner(self.qcrbox_adapter.client)
+    
     # Load applications and commands from API
-    self.applications = []
-    self.commands = []
-    self.selected_command = None
-    self.parameter_states = {}
-    self.current_calculation_id = None
-    self.current_calculation_status = None
-    self.polling_active = False
-    self.run_button_text = "Run Command"
-    self.run_button_color = "#FFFFFF"
-    self.run_button_enabled = True
-    
-    # Interactive session state
-    self.current_session_id = None
-    self.current_session_dataset_id = None
-    self.is_interactive_session = False
-    
     self.load_applications()
     
-    # Initialize button HTML
-    button_html = generate_run_button_html(self.run_button_text, self.run_button_color, self.run_button_enabled)
-    OV.write_to_olex("qcb-run-button.htm", button_html)
-    OV.write_to_olex("qcb-parameters.htm" , "")
-    
-    # Initialize help file
+    # Initialize GUI
+    self.gui.update_run_button(
+        self.state.run_button_text,
+        self.state.run_button_color,
+        self.state.run_button_enabled
+    )
+    self.gui.clear_parameter_panel()
     self.update_help_file()
 
     if not from_outside:
@@ -142,29 +154,7 @@ class olex2qcrbox(PT):
   
   def get_olex2_colors(self):
     """Get Olex2 color scheme from settings."""
-    try:
-      return {
-        'bg_color': olx.GetVar('HtmlBgColour', '#222222'),
-        'font_color': olx.GetVar('HtmlFontColour', '#ffffff'),
-        'table_bg': olx.GetVar('HtmlTableBgColour', '#222222'),
-        'highlight': olx.GetVar('HtmlHighlightColour', '#ff8888'),
-        'link_color': olx.GetVar('HtmlLinkColour', '#ababff'),
-        'font_name': olx.GetVar('HtmlFontName', 'Bahnschrift'),
-        'error_color': OV.GetParam('gui.red', '#ff6666').hexadecimal if hasattr(OV.GetParam('gui.red', '#ff6666'), 'hexadecimal') else '#ff6666',
-        'secondary_color': OV.GetParam('gui.grey', '#aaaaaa').hexadecimal if hasattr(OV.GetParam('gui.grey', '#aaaaaa'), 'hexadecimal') else '#aaaaaa',
-      }
-    except Exception as e:
-      print(f"Warning: Could not load Olex2 colors, using defaults: {e}")
-      return {
-        'bg_color': '#222222',
-        'font_color': '#ffffff',
-        'table_bg': '#222222',
-        'highlight': '#ff8888',
-        'link_color': '#ababff',
-        'font_name': 'Bahnschrift',
-        'error_color': '#ff6666',
-        'secondary_color': '#aaaaaa',
-      }
+    return self.gui.get_olex2_colors()
   
   def load_applications(self):
     """Load available applications and commands from QCrBox API"""
@@ -173,18 +163,18 @@ class olex2qcrbox(PT):
       response = list_applications.sync(client=self.qcrbox_adapter.client)
       
       if hasattr(response, 'payload') and hasattr(response.payload, 'applications'):
-        self.applications = response.payload.applications
+        self.state.applications = response.payload.applications
         
         # Extract all commands from all applications
-        self.commands = []
-        for app in self.applications:
+        self.state.commands = []
+        for app in self.state.applications:
           # Filter out internal/private commands (starting with __)
           public_commands = [cmd for cmd in app.commands if not cmd.name.startswith('__')]
-          self.commands.extend(public_commands)
+          self.state.commands.extend(public_commands)
         
         # Initialize parameter states for all commands using command.id
-        for cmd in self.commands:
-          self.parameter_states[cmd.id] = {}
+        for cmd in self.state.commands:
+          self.state.parameter_states[cmd.id] = {}
           
           # Set default values from parameters
           if hasattr(cmd.parameters, 'additional_properties'):
@@ -198,24 +188,23 @@ class olex2qcrbox(PT):
               
               if default_val is None:
                 default_val = ''
-              self.parameter_states[cmd.id][param_name] = default_val
+              self.state.parameter_states[cmd.id][param_name] = default_val
         
         # Set the first command as selected
-        if self.commands:
-          first_cmd = self.commands[0]
-          self.selected_command = f"{first_cmd.name}({first_cmd.application})"
+        if self.state.commands:
+          first_cmd = self.state.commands[0]
+          self.state.selected_command = f"{first_cmd.name}({first_cmd.application})"
           
-        print(f"Loaded {len(self.applications)} applications with {len(self.commands)} commands from QCrBox API")
+        print(f"Loaded {len(self.state.applications)} applications with {len(self.state.commands)} commands from QCrBox API")
       else:
         print("Failed to parse applications response")
-        self.applications = []
-        self.commands = []
+        self.state.applications = []
+        self.state.commands = []
     except Exception as e:
       print(f"Failed to load applications from QCrBox API: {e}")
-      import traceback
       traceback.print_exc()
-      self.applications = []
-      self.commands = []
+      self.state.applications = []
+      self.state.commands = []
     
   def print_applications(self):
     """Retrieve and print all available applications from QCrBox API"""
@@ -247,17 +236,16 @@ class olex2qcrbox(PT):
       
     except Exception as e:
       print(f"Error retrieving applications: {e}")
-      import traceback
       traceback.print_exc()
       return None
   
   def print_commands(self):
     """Print all available commands with their details"""
-    if not self.commands:
+    if not self.state.commands:
       print("No commands loaded. Try running load_commands() first.")
       return
     
-    for cmd in self.commands:
+    for cmd in self.state.commands:
       print(f"Command: {cmd.name}")
       print(f"  Application: {cmd.application} (ID: {cmd.application_id})")
       print(f"  Description: {cmd.description}")
@@ -267,62 +255,38 @@ class olex2qcrbox(PT):
   def reload_commands(self):
     """Reload applications and commands from API and reset selection"""
     print("Reloading applications and commands from QCrBox API...")
-    self.applications = []
-    self.commands = []
-    self.selected_command = None
-    self.parameter_states = {}
+    self.state.applications = []
+    self.state.commands = []
+    self.state.selected_command = None
+    self.state.parameter_states = {}
     self.load_applications()
     # Update the GUI
-    OV.write_to_olex("qcb-parameters.htm", "")
-    self.update_run_button("Run Command", "#FFFFFF", True)
+    self.gui.clear_parameter_panel()
+    self.gui.update_run_button("Run Command", "#FFFFFF", True)
     self.update_help_file()
     return True
   
   def update_help_file(self):
     """Generate and write dynamic help HTML file based on current state"""
-    try:
-      # Get current color scheme
-      colors = self.get_olex2_colors()
-      
-      # Generate help content using template module
-      help_content = generate_help_content_html(
-          qcrbox_available=self.qcrbox_adapter.health_check(),
-          applications=self.applications,
-          commands=self.commands,
-          selected_command=self.selected_command,
-          colors=colors
-      )
-      
-      print(f"[DEBUG] Help content length: {len(help_content)}")
-      print(f"[DEBUG] Help content preview: {help_content[:200]}")
-      
-      # Wrap in full HTML template
-      help_html = generate_help_file_html(help_content, colors)
-      
-      print(f"[DEBUG] Help HTML length: {len(help_html)}")
-      print(f"[DEBUG] Registering help content...")
-      
-      # Register help content as Olex2 variable (not VFS file)
-      olx.SetVar('qcrbox_command_help', help_html)
-      print(f"[DEBUG] Help content registered successfully")
-      
-    except Exception as e:
-      print(f"[ERROR] Failed to update help file: {e}")
-      import traceback
-      traceback.print_exc()
+    self.gui.update_help_file(
+        qcrbox_available=self.qcrbox_adapter.health_check(),
+        applications=self.state.applications,
+        commands=self.state.commands,
+        selected_command=self.state.selected_command
+    )
     
   def generate_command_list_string(self):
-    if not self.commands:
+    if not self.state.commands:
       return "No commands available"
-    return ";".join([f"{cmd.name}({cmd.application})" for cmd in self.commands])
+    return ";".join([f"{cmd.name}({cmd.application})" for cmd in self.state.commands])
   
   def generate_default_command_value(self):
-    return self.selected_command
+    return self.state.selected_command
 
   def set_selected_command(self, command_name):
-    self.selected_command = command_name
+    self.state.selected_command = command_name
     new_parameter_html = self.produce_parameter_html()
-    OV.write_to_olex("qcb-parameters.htm" , new_parameter_html)
+    self.gui.update_parameter_panel(new_parameter_html)
     # Update help file when command changes
     self.update_help_file()
 
@@ -331,30 +295,19 @@ class olex2qcrbox(PT):
     # Ensure command_id is always an integer for consistency
     command_id = int(command_id)
     print(f"Setting parameter state for command {command_id}, {parameter_name} to {value}")
-    if command_id in self.parameter_states:
-      self.parameter_states[command_id][parameter_name] = value
+    if command_id in self.state.parameter_states:
+      self.state.parameter_states[command_id][parameter_name] = value
     else:
-      self.parameter_states[command_id] = {parameter_name: value}
+      self.state.parameter_states[command_id] = {parameter_name: value}
 
   def get_parameter_state(self, command_id, parameter_name):
     # Ensure command_id is always an integer for consistency
     command_id = int(command_id)
-    return self.parameter_states.get(command_id, {}).get(parameter_name, None)
+    return self.state.parameter_states.get(command_id, {}).get(parameter_name, None)
   
   def is_command_interactive(self, command_obj):
     """Check if a command is interactive based on its metadata."""
-    if not command_obj:
-      return False
-    # Check if command has interactive flag in metadata
-    if hasattr(command_obj, 'interactive') and command_obj.interactive:
-      return True
-    # Check if command name or description suggests it's interactive
-    if 'interactive' in command_obj.name.lower():
-      return True
-    if hasattr(command_obj, 'description') and command_obj.description:
-      if 'interactive' in command_obj.description.lower():
-        return True
-    return False
+    return self.session_manager.is_command_interactive(command_obj)
   
   def command_has_output_cif(self, command_obj):
     """Check if a command has an output_cif parameter (will produce a CIF file)."""
@@ -367,31 +320,24 @@ class olex2qcrbox(PT):
           return True
     return False
   
+  def run_tests(self):
+    """Run all plugin tests (registered function for Olex2)."""
+    return tests.run_all_tests(OV, olx)
+  
   def reset_session_state(self):
     """Force reset all session state. Use if a session is stuck or failed."""
     print("Resetting session state...")
     
     # Try to close any active session if one exists
-    if self.current_session_id:
+    if self.state.current_session_id:
       try:
-        from qcrboxapiclient.api.interactive_sessions import close_interactive_session
-        print(f"Attempting to close session {self.current_session_id}...")
-        close_interactive_session.sync(
-          client=self.qcrbox_adapter.client,
-          id=self.current_session_id
-        )
-        print("Session closed")
+        self.session_manager.close_interactive_session(self.state.current_session_id)
       except Exception as e:
         print(f"Could not close session (may not exist): {e}")
     
     # Reset all state
-    self.current_session_id = None
-    self.current_session_dataset_id = None
-    self.is_interactive_session = False
-    self.current_calculation_id = None
-    self.current_calculation_status = None
-    self.polling_active = False
-    self.update_run_button("Run Command", "#FFFFFF", True)
+    self.state.reset_all_execution_state()
+    self.gui.update_run_button("Run Command", "#FFFFFF", True)
     print("Session state reset complete")
   
   def list_active_sessions(self):
@@ -428,37 +374,19 @@ class olex2qcrbox(PT):
   
   def close_all_sessions(self):
     """Close all active interactive sessions on the server."""
-    sessions = self.list_active_sessions()
-    
-    if not sessions:
-      print("No sessions to close")
-      return
-    
-    from qcrboxapiclient.api.interactive_sessions import close_interactive_session
-    
-    for session in sessions:
-      try:
-        print(f"Closing session {session.session_id}...")
-        close_interactive_session.sync(
-          client=self.qcrbox_adapter.client,
-          id=session.session_id
-        )
-        print(f"  ✓ Closed successfully")
-      except Exception as e:
-        print(f"  ✗ Failed to close: {e}")
+    closed, failed = self.session_manager.close_all_sessions()
     
     # Reset local state
-    self.current_session_id = None
-    self.current_session_dataset_id = None
-    self.is_interactive_session = False
-    self.update_run_button("Run Command", "#FFFFFF", True)
-    print("\nAll sessions closed and local state reset")
+    self.state.reset_session_state()
+    self.gui.update_run_button("Run Command", "#FFFFFF", True)
+    print("\nLocal state reset")
+    return (closed, failed)
   
   def poll_calculation_status(self):
     """Poll the current calculation status and update GUI"""
-    print(f"[POLL] Checking calculation {self.current_calculation_id}, polling_active={self.polling_active}")
+    print(f"[POLL] Checking calculation {self.state.current_calculation_id}, polling_active={self.state.polling_active}")
     
-    if not self.current_calculation_id or not self.polling_active:
+    if not self.state.current_calculation_id or not self.state.polling_active:
       print("[POLL] Stopping - no calculation ID or polling inactive")
       return
     
@@ -468,7 +396,7 @@ class olex2qcrbox(PT):
       
       print(f"[POLL] Fetching status from API...")
       response = calculations.get_calculation_by_id.sync(
-        id=self.current_calculation_id,
+        id=self.state.current_calculation_id,
         client=self.qcrbox_adapter.client
       )
       
@@ -477,30 +405,30 @@ class olex2qcrbox(PT):
         status = calc.status
         print(f"[POLL] Current status: {status}")
         
-        if status != self.current_calculation_status:
-          self.current_calculation_status = status
+        if status != self.state.current_calculation_status:
+          self.state.current_calculation_status = status
           print(f"[POLL] Status changed: {status}")
           
           if status == CalculationStatus.SUCCESSFUL:
-            self.polling_active = False
-            self.update_run_button("Retrieve Results", "#00AA00", True)
+            self.state.polling_active = False
+            self.gui.update_run_button("Retrieve Results", "#00AA00", True)
             print("Calculation completed successfully!")
           
           elif status == CalculationStatus.FAILED:
-            self.polling_active = False
-            self.update_run_button("Calculation Failed (see log)", "#AA0000", True)
+            self.state.polling_active = False
+            self.gui.update_run_button("Calculation Failed (see log)", "#AA0000", True)
             print(f"Calculation FAILED!")
             print(f"Calculation metadata: {calc}")
             if hasattr(calc, 'error_message'):
               print(f"Error message: {calc.error_message}")
           
           elif status == CalculationStatus.STOPPED:
-            self.polling_active = False
-            self.update_run_button("Calculation Stopped", "#FF8800", True)
+            self.state.polling_active = False
+            self.gui.update_run_button("Calculation Stopped", "#FF8800", True)
             print("Calculation was stopped")
         
         # Continue polling if still running
-        if self.polling_active:
+        if self.state.polling_active:
           print(f"[POLL] Scheduling next poll in 2 seconds...")
           import threading
           timer = threading.Timer(2.0, self.poll_calculation_status)
@@ -513,7 +441,7 @@ class olex2qcrbox(PT):
       print(f"[POLL ERROR] Error polling calculation status: {e}")
       import traceback
       traceback.print_exc()
-      self.polling_active = False
+      self.state.polling_active = False
   
   def still_running_calculation(self):
     """Show message when user clicks disabled button during calculation"""
@@ -523,16 +451,16 @@ class olex2qcrbox(PT):
   def start_interactive_session(self):
     """Start an interactive session and open browser to VNC URL."""
     # Check if we have lingering session state and clean it up
-    if self.is_interactive_session or self.current_session_id:
+    if self.state.is_interactive_session or self.state.current_session_id:
       print("WARNING: Found lingering session state, cleaning up...")
       self.reset_session_state()
     
-    if not self.selected_command or not self.commands:
+    if not self.state.selected_command or not self.state.commands:
       print("No command selected")
       return None
     
-    current_command = self.selected_command
-    command_obj = next((cmd for cmd in self.commands if f"{cmd.name}({cmd.application})" == current_command), None)
+    current_command = self.state.selected_command
+    command_obj = next((cmd for cmd in self.state.commands if f"{cmd.name}({cmd.application})" == current_command), None)
     
     if not command_obj:
       print(f"Command not found: {current_command}")
@@ -551,7 +479,7 @@ class olex2qcrbox(PT):
     arguments = {}
     if hasattr(command_obj.parameters, 'additional_properties'):
       for param_name, param_info in command_obj.parameters.additional_properties.items():
-        param_value = self.parameter_states.get(command_obj.id, {}).get(param_name)
+        param_value = self.state.parameter_states.get(command_obj.id, {}).get(param_name)
         
         # Skip if no value set
         if param_value is None or param_value == '':
@@ -597,10 +525,10 @@ class olex2qcrbox(PT):
       print(f"Interactive session created! Session ID: {session_id}")
       
       # Store session info
-      self.current_session_id = session_id
-      self.current_calculation_id = session_id  # Session ID is also calculation ID
-      self.current_session_dataset_id = dataset_id
-      self.is_interactive_session = True
+      self.state.current_session_id = session_id
+      self.state.current_calculation_id = session_id  # Session ID is also calculation ID
+      self.state.current_session_dataset_id = dataset_id
+      self.state.is_interactive_session = True
       
       # Construct VNC URL from stored qcrbox_url
       qcrbox_base = self.qcrbox_url.replace('http://', '').replace('https://', '').split(':')[0]
@@ -613,7 +541,7 @@ class olex2qcrbox(PT):
       webbrowser.open(vnc_url)
       
       # Update button to show session is active
-      self.update_run_button("Close Session & Retrieve Results", "#FF8800", True)
+      self.gui.update_run_button("Close Session & Retrieve Results", "#FF8800", True)
       
       return session_id
       
@@ -622,19 +550,19 @@ class olex2qcrbox(PT):
       import traceback
       traceback.print_exc()
       # Clean up state on failure
-      self.current_session_id = None
-      self.current_session_dataset_id = None
-      self.is_interactive_session = False
-      self.update_run_button("Run Command", "#FFFFFF", True)
+      self.state.current_session_id = None
+      self.state.current_session_dataset_id = None
+      self.state.is_interactive_session = False
+      self.gui.update_run_button("Run Command", "#FFFFFF", True)
       return None
   
   def close_interactive_session_and_retrieve(self):
     """Close the interactive session and retrieve the resulting CIF file."""
-    if not self.current_session_id:
+    if not self.state.current_session_id:
       print("No active interactive session")
       return False
     
-    print(f"Closing interactive session {self.current_session_id}...")
+    print(f"Closing interactive session {self.state.current_session_id}...")
     
     try:
       from qcrboxapiclient.api.interactive_sessions import close_interactive_session
@@ -643,7 +571,7 @@ class olex2qcrbox(PT):
       # Close the session
       response = close_interactive_session.sync(
         client=self.qcrbox_adapter.client,
-        id=self.current_session_id
+        id=self.state.current_session_id
       )
       
       if isinstance(response, QCrBoxErrorResponse):
@@ -657,20 +585,20 @@ class olex2qcrbox(PT):
       time.sleep(2)
       
       # Check if this command even produces output CIFs
-      current_command = self.selected_command
+      current_command = self.state.selected_command
       command_obj = None
-      if current_command and self.commands:
-        command_obj = next((cmd for cmd in self.commands if f"{cmd.name}({cmd.application})" == current_command), None)
+      if current_command and self.state.commands:
+        command_obj = next((cmd for cmd in self.state.commands if f"{cmd.name}({cmd.application})" == current_command), None)
       
       has_output_cif = self.command_has_output_cif(command_obj) if command_obj else False
       
       if not has_output_cif:
         print("This command does not produce an output CIF file - nothing to retrieve")
         # Clean up and exit
-        self.current_session_id = None
-        self.current_session_dataset_id = None
-        self.is_interactive_session = False
-        self.update_run_button("Run Command", "#FFFFFF", True)
+        self.state.current_session_id = None
+        self.state.current_session_dataset_id = None
+        self.state.is_interactive_session = False
+        self.gui.update_run_button("Run Command", "#FFFFFF", True)
         return True  # Successfully closed, just no output
       
       # Now retrieve the output - the session should have created an output dataset
@@ -680,7 +608,7 @@ class olex2qcrbox(PT):
       print("Checking for output dataset...")
       # Get calculation details to find output dataset
       calc_response = calculations.get_calculation_by_id.sync(
-        id=self.current_session_id,
+        id=self.state.current_session_id,
         client=self.qcrbox_adapter.client
       )
       
@@ -693,36 +621,36 @@ class olex2qcrbox(PT):
           print(f"Output dataset ID: {output_dataset_id}")
           
           # Set the status and ID BEFORE calling download method
-          self.current_calculation_id = self.current_session_id
-          self.current_calculation_status = CalculationStatus.SUCCESSFUL
+          self.state.current_calculation_id = self.state.current_session_id
+          self.state.current_calculation_status = CalculationStatus.SUCCESSFUL
           
           # Use existing download method
           result = self.download_and_open_result()
           
           # Clean up session state after download
-          self.current_session_id = None
-          self.current_session_dataset_id = None
-          self.is_interactive_session = False
-          self.current_calculation_id = None
-          self.current_calculation_status = None
+          self.state.current_session_id = None
+          self.state.current_session_dataset_id = None
+          self.state.is_interactive_session = False
+          self.state.current_calculation_id = None
+          self.state.current_calculation_status = None
           
           return result
         else:
           print("No output dataset found from interactive session")
           print("This may be normal if no output CIF was created during the session")
           # Still clean up
-          self.current_session_id = None
-          self.current_session_dataset_id = None
-          self.is_interactive_session = False
-          self.update_run_button("Run Command", "#FFFFFF", True)
+          self.state.current_session_id = None
+          self.state.current_session_dataset_id = None
+          self.state.is_interactive_session = False
+          self.gui.update_run_button("Run Command", "#FFFFFF", True)
           return False
       else:
         print("Failed to get calculation details")
         # Clean up
-        self.current_session_id = None
-        self.current_session_dataset_id = None
-        self.is_interactive_session = False
-        self.update_run_button("Run Command", "#FFFFFF", True)
+        self.state.current_session_id = None
+        self.state.current_session_dataset_id = None
+        self.state.is_interactive_session = False
+        self.gui.update_run_button("Run Command", "#FFFFFF", True)
         return False
         
     except Exception as e:
@@ -730,35 +658,27 @@ class olex2qcrbox(PT):
       import traceback
       traceback.print_exc()
       # Clean up
-      self.current_session_id = None
-      self.current_session_dataset_id = None
-      self.is_interactive_session = False
-      self.update_run_button("Run Command", "#FFFFFF", True)
+      self.state.current_session_id = None
+      self.state.current_session_dataset_id = None
+      self.state.is_interactive_session = False
+      self.gui.update_run_button("Run Command", "#FFFFFF", True)
       return False
   
   def update_run_button(self, text, color, enabled):
-    """Update the run button appearance"""
-    self.run_button_text = text
-    self.run_button_color = color
-    self.run_button_enabled = enabled
-    print(f"Button updated: '{text}' (color: {color}, enabled: {enabled})")
-    
-    # Regenerate the button HTML and update the GUI
-    try:
-      button_html = generate_run_button_html(self.run_button_text, self.run_button_color, self.run_button_enabled)
-      OV.write_to_olex("qcb-run-button.htm", button_html)
-      print(f"[GUI] Button HTML updated")
-    except Exception as e:
-      print(f"[GUI] Failed to update button HTML: {e}")
+    """Update the run button appearance - delegates to GUI controller"""
+    self.state.run_button_text = text
+    self.state.run_button_color = color
+    self.state.run_button_enabled = enabled
+    self.gui.update_run_button(text, color, enabled)
   
   def download_and_open_result(self):
     """Download the result CIF from completed calculation and open in Olex2"""
-    if not self.current_calculation_id:
+    if not self.state.current_calculation_id:
       print("No calculation to retrieve results from")
       return False
     
-    if self.current_calculation_status != CalculationStatus.SUCCESSFUL:
-      print(f"Cannot retrieve results - calculation status is: {self.current_calculation_status}")
+    if self.state.current_calculation_status != CalculationStatus.SUCCESSFUL:
+      print(f"Cannot retrieve results - calculation status is: {self.state.current_calculation_status}")
       return False
     
     try:
@@ -767,7 +687,7 @@ class olex2qcrbox(PT):
       
       # Get calculation details to find output dataset
       response = calculations.get_calculation_by_id.sync(
-        id=self.current_calculation_id,
+        id=self.state.current_calculation_id,
         client=self.qcrbox_adapter.client
       )
       
@@ -776,7 +696,7 @@ class olex2qcrbox(PT):
         return False
       
       calc = response.payload.calculations[0]
-      print(f"Retrieving results from calculation {self.current_calculation_id}")
+      print(f"Retrieving results from calculation {self.state.current_calculation_id}")
       
       # Get output dataset ID
       output_dataset_id = calc.output_dataset_id
@@ -828,9 +748,9 @@ class olex2qcrbox(PT):
                     f.write(file_content)
                   print(f"Saved to: {output_path} (converted to DDL1 format)")
                   print("Opening in Olex2...")
-                  olx.Atreap(output_path)
+                  self.gui.open_file_in_olex2(output_path)
                   # Reset button for next calculation
-                  self.update_run_button("Run Command", "#FFFFFF", True)
+                  self.gui.update_run_button("Run Command", "#FFFFFF", True)
                   return True
         
         print("Could not find file content in JSON response")
@@ -847,9 +767,9 @@ class olex2qcrbox(PT):
           f.write(file_content)
         print(f"Saved to: {output_path} (converted to DDL1 format)")
         print("Opening in Olex2...")
-        olx.Atreap(output_path)
+        self.gui.open_file_in_olex2(output_path)
         # Reset button for next calculation
-        self.update_run_button("Run Command", "#FFFFFF", True)
+        self.gui.update_run_button("Run Command", "#FFFFFF", True)
         return True
       
     except Exception as e:
@@ -859,58 +779,8 @@ class olex2qcrbox(PT):
       return False
   
   def convert_cif_ddl2_to_ddl1(self, cif_text):
-    """Convert CIF data names from DDL2 format (dots) to DDL1 format (underscores).
-    
-    Converts entries like _cell.length_a to _cell_length_a while preserving
-    numeric values (12.3), string values, and multiline strings.
-    Only converts dots within CIF data names (starting with _ at line beginning).
-    
-    Args:
-        cif_text: The CIF file content as a string
-        
-    Returns:
-        Modified CIF text with DDL1 format data names
-    """
-    import re
-    
-    lines = cif_text.split('\n')
-    result_lines = []
-    in_multiline_string = False
-    
-    # Pattern to match CIF data names: optional whitespace, underscore, then name with dots
-    # Captures the full data name including dots
-    data_name_pattern = re.compile(r'^(\s*)(_[a-zA-Z0-9_.\-]+)')
-    
-    for line in lines:
-      # Check for multiline string delimiters (semicolon at start of line)
-      if line.startswith(';'):
-        in_multiline_string = not in_multiline_string
-        result_lines.append(line)
-        continue
-      
-      # If inside a multiline string, don't modify
-      if in_multiline_string:
-        result_lines.append(line)
-        continue
-      
-      # Check if line starts with a CIF data name
-      match = data_name_pattern.match(line)
-      if match:
-        # Extract the whitespace prefix and the data name
-        whitespace = match.group(1)
-        data_name = match.group(2)
-        rest_of_line = line[match.end():]
-        
-        # Convert dots to underscores in the data name only
-        converted_name = data_name.replace('.', '_')
-        
-        # Reconstruct the line
-        result_lines.append(whitespace + converted_name + rest_of_line)
-      else:
-        # No data name at start of line, keep as is
-        result_lines.append(line)
-    
-    return '\n'.join(result_lines)
+    """Convert CIF data names from DDL2 format (dots) to DDL1 format (underscores)."""
+    return convert_cif_ddl2_to_ddl1(cif_text)
   
   def get_current_cif_text(self):
     """Get the current structure as CIF text"""
@@ -929,11 +799,11 @@ class olex2qcrbox(PT):
   
   def auto_fill_cif_parameters(self):
     """Automatically fill input_cif parameters with current structure"""
-    if not self.selected_command or not self.commands:
+    if not self.state.selected_command or not self.state.commands:
       return
     
-    current_command = self.selected_command
-    command_obj = next((cmd for cmd in self.commands if f"{cmd.name}({cmd.application})" == current_command), None)
+    current_command = self.state.selected_command
+    command_obj = next((cmd for cmd in self.state.commands if f"{cmd.name}({cmd.application})" == current_command), None)
     
     if not command_obj:
       return
@@ -959,7 +829,7 @@ class olex2qcrbox(PT):
           
           # Auto-fill CIF data file parameters
           if dtype == 'QCrBox.cif_data_file':
-            self.parameter_states[command_obj.id][param_name] = {
+            self.state.parameter_states[command_obj.id][param_name] = {
               'data_file_id': uploaded.data_file_id
             }
             print(f"Auto-filled {param_name} with current CIF (file_id: {uploaded.data_file_id})")
@@ -978,15 +848,15 @@ class olex2qcrbox(PT):
     Routes to either interactive session or non-interactive command execution.
     """
     # If there's an active interactive session and button was clicked, close it
-    if self.is_interactive_session and self.current_session_id:
+    if self.state.is_interactive_session and self.state.current_session_id:
       return self.close_interactive_session_and_retrieve()
     
-    if not self.selected_command or not self.commands:
+    if not self.state.selected_command or not self.state.commands:
       print("No command selected")
       return None
     
-    current_command = self.selected_command
-    command_obj = next((cmd for cmd in self.commands if f"{cmd.name}({cmd.application})" == current_command), None)
+    current_command = self.state.selected_command
+    command_obj = next((cmd for cmd in self.state.commands if f"{cmd.name}({cmd.application})" == current_command), None)
     
     if not command_obj:
       print(f"Command not found: {current_command}")
@@ -999,8 +869,8 @@ class olex2qcrbox(PT):
     
     # Non-interactive command execution follows
     print(f"DEBUG: command_obj.id = {command_obj.id}")
-    print(f"DEBUG: parameter_states keys = {list(self.parameter_states.keys())}")
-    print(f"DEBUG: parameter_states[{command_obj.id}] = {self.parameter_states.get(command_obj.id, 'NOT FOUND')}")
+    print(f"DEBUG: parameter_states keys = {list(self.state.parameter_states.keys())}")
+    print(f"DEBUG: parameter_states[{command_obj.id}] = {self.state.parameter_states.get(command_obj.id, 'NOT FOUND')}")
     
     # Always auto-fill CIF parameters from current structure
     print("Auto-filling CIF parameters from current structure...")
@@ -1013,7 +883,7 @@ class olex2qcrbox(PT):
     arguments = {}
     if hasattr(command_obj.parameters, 'additional_properties'):
       for param_name, param_info in command_obj.parameters.additional_properties.items():
-        param_value = self.parameter_states.get(command_obj.id, {}).get(param_name)
+        param_value = self.state.parameter_states.get(command_obj.id, {}).get(param_name)
         
         print(f"DEBUG: Checking parameter '{param_name}': value = {param_value}, type = {type(param_value)}")
         
@@ -1050,12 +920,12 @@ class olex2qcrbox(PT):
       print(f"Command started! Calculation ID: {execution.calculation_id}")
       
       # Store calculation info and start polling
-      self.current_calculation_id = execution.calculation_id
-      self.current_calculation_status = CalculationStatus.RUNNING
-      self.polling_active = True
+      self.state.current_calculation_id = execution.calculation_id
+      self.state.current_calculation_status = CalculationStatus.RUNNING
+      self.state.polling_active = True
       
       # Update button to show running state
-      self.update_run_button("Calculation Running...", "#0088FF", False)
+      self.gui.update_run_button("Calculation Running...", "#0088FF", False)
       
       # Start background polling
       import threading
@@ -1069,15 +939,15 @@ class olex2qcrbox(PT):
       print(f"Failed to run command: {e}")
       import traceback
       traceback.print_exc()
-      self.update_run_button("Run Command", "#FFFFFF", True)
+      self.gui.update_run_button("Run Command", "#FFFFFF", True)
       return None
   
   def produce_parameter_html(self):
-    if not self.selected_command or not self.commands:
+    if not self.state.selected_command or not self.state.commands:
       return "<td>No command selected</td>"
     
-    current_command = self.selected_command
-    command_obj = next((cmd for cmd in self.commands if f"{cmd.name}({cmd.application})" == current_command), None)
+    current_command = self.state.selected_command
+    command_obj = next((cmd for cmd in self.state.commands if f"{cmd.name}({cmd.application})" == current_command), None)
     
     if not command_obj:
       return "<td>Command not found</td>"

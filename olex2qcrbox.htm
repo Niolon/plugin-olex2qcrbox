@@ -1,10 +1,11 @@
 
 <!-- #include tool-top gui/blocks/tool-top.htm;image=#image;onclick=#onclick;1; -->
 
-<!-- #include tool-row gui/blocks/tool-row.htm;1; -->
-  <td valign='top' width="$GetVar(HtmlTableFirstcolWidth)" align='center' bgcolor="$GetVar(HtmlTableFirstcolColour)">
-    $spy.MakeHoverButton('btn-info','spy.make_help_box -name=qcrbox_command_help -popout=False')
-  </td>
+<tr name='#name' bgcolor="$GetVar(HtmlTableBgColour)">
+<td name="BLOCK_TOOL_FIRST_COLOUMN" valign='top' width="$GetVar(HtmlTableFirstcolWidth)" align='center' bgcolor="$GetVar(HtmlTableFirstcolColour)">
+$spy.MakeHoverButton('btn-info','spy.make_help_box -name=qcrbox_command_help -popout=False')
+</td>
+<!-- #include row_table_on gui/blocks/row_table_on.htm;1; -->
   <td colspan=3>
     <table width="100%" border="0" cellpadding="0" cellspacing="0">
       <tr>
@@ -30,8 +31,6 @@
 <!-- #include qcb-parameters qcb-parameters.htm;1; -->
 
 <!-- #include qcb-run-button qcb-run-button.htm;1; -->
-
-<!-- #include h3-olex2qcrbox-extras $GetVar(olex2qcrbox_plugin_path)\h3-olex2qcrbox-extras.htm;gui\blocks\tool-h3-off.htm;image=h3-olex2qcrbox_extras;onclick=;colspan=1;2; -->
 
 <!-- #include tool-footer gui/blocks/tool-footer.htm;colspan=2;1; -->
 
