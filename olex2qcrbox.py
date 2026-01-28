@@ -89,6 +89,7 @@ from qcrbox_plugin import (
     tests,
     gui_controller,
 )
+from qcrbox_plugin.tsc import TSCBFile
 
 # Force reload of html_templates to pick up changes
 import qcrbox_plugin.html_templates
@@ -827,6 +828,10 @@ class olex2qcrbox(PT):
                 # Try to get file content
                 if 'content' in file_info:
                   file_content = file_info['content']
+                  
+                  # Try to create TSCB file before DDL conversion
+                  self.try_create_tscb_from_cif(file_content)
+                  
                   # Convert DDL2 to DDL1 format for Olex2 compatibility
                   file_content = self.convert_cif_ddl2_to_ddl1(file_content)
                   output_path = os.path.join(OV.FilePath(), filename)
@@ -851,6 +856,10 @@ class olex2qcrbox(PT):
         print("Response is not JSON, trying as direct file content...")
         # If not JSON, treat as direct file content
         file_content = download_response.content.decode('utf-8')
+        
+        # Try to create TSCB file before DDL conversion
+        self.try_create_tscb_from_cif(file_content)
+        
         # Convert DDL2 to DDL1 format for Olex2 compatibility
         file_content = self.convert_cif_ddl2_to_ddl1(file_content)
         output_path = os.path.join(OV.FilePath(), "qcrbox_result.cif")
@@ -876,6 +885,58 @@ class olex2qcrbox(PT):
   def convert_cif_ddl2_to_ddl1(self, cif_text):
     """Convert CIF data names from DDL2 format (dots) to DDL1 format (underscores)."""
     return convert_cif_ddl2_to_ddl1(cif_text)
+  
+  def try_create_tscb_from_cif(self, cif_text):
+    """Try to create a TSCB file from CIF text if it contains TSC entries.
+    
+    Args:
+        cif_text: The CIF content (before DDL2->DDL1 conversion)
+    
+    Returns:
+        True if TSCB file was created, False otherwise
+    """
+    try:
+      from iotbx.cif import reader
+      
+      # Parse CIF to check for required entries
+      cif_model = reader(input_string=cif_text).model()
+      if not cif_model:
+        return False
+      
+      # Get first block
+      block_name = list(cif_model.keys())[0]
+      cif_block = cif_model[block_name]
+      
+      # Check if required TSC entries are present
+      required_entries = [
+        "_aspheric_ffs.source",
+        "_aspheric_ffs_partitioning.name",
+        "_aspheric_ffs_partitioning.software",
+        "_wfn_moiety.asu_atom_site_label"
+      ]
+      
+      has_all_entries = all(entry in cif_block for entry in required_entries)
+      has_loop = cif_block.get_loop("_aspheric_ff") is not None
+      
+      if not (has_all_entries and has_loop):
+        print("CIF does not contain TSC entries - skipping TSCB creation")
+        return False
+      
+      # Create TSCB file
+      print("Found TSC entries in CIF - creating TSCB file...")
+      tscb = TSCBFile.from_cif_string(cif_text)
+      
+      # Save TSCB file using block name
+      tscb_path = os.path.join(OV.FilePath(), f"{block_name}.tscb")
+      tscb.to_file(tscb_path)
+      print(f"Created TSCB file: {tscb_path}")
+      return True
+      
+    except Exception as e:
+      print(f"Could not create TSCB file: {e}")
+      import traceback
+      traceback.print_exc()
+      return False
   
   def get_current_cif_text(self):
     """Get the current structure as CIF text"""
