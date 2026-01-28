@@ -1,0 +1,5 @@
+
+  p_name = olex2qcrbox
+  p_htm = olex2qcrbox
+  p_img = [("olex2qcrbox",'h1'), ("olex2qcrbox-Extras",'h3')]
+  p_scope = olex2qcrbox

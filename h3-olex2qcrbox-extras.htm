@@ -1,0 +1,26 @@
+
+<!-- #include tool-h3 gui\blocks\tool-h3.htm;image=#image;colspan=1;1; -->
+<!-- #include tool-row-help gui/blocks/tool-row-help.htm;name=h3-olex2qcrbox_1; help_ext=olex2qcrbox_1;1; -->
+
+
+    $+
+    html.Snippet(GetVar(default_link),
+    "value=Reload Plugin",
+    "onclick=py.run D:\Olex2-1.5/util/pyUtil/PluginLib//plugin-olex2qcrbox/olex2qcrbox.py",
+    )$-
+
+    $+
+    html.Snippet(GetVar(default_link),
+    "value=Settings",
+    "onclick=spy.EditParams(olex2qcrbox)",
+    )$-
+
+    $+
+    html.Snippet(GetVar(default_link),
+    "value=Open Folder",
+    "onclick=shell D:\Olex2-1.5/util/pyUtil/PluginLib//plugin-olex2qcrbox",
+    )$-
+
+
+
+<!-- #include row_table_off gui\blocks\row_table_off.htm;1; -->

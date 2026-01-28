@@ -1,0 +1,11 @@
+
+olex2qcrbox{
+  gui{
+    location = 'tools'
+      .type = str
+      .help = The tab item where the olex2qcrbox GUI shall appear.
+    before = 'images'
+      .type = str
+      .help = The tool before which the olex2qcrbox GUI shall appear.
+    }
+}
