@@ -159,7 +159,11 @@ def generate_run_button_html(button_text: str, button_color: str, enabled: bool)
     # Determine onclick action based on button text and enabled state
     if not enabled:
         onclick_action = "spy.qcb.still_running_calculation()"
+    elif "Close Session" in button_text:
+        # For interactive sessions, close session first then retrieve
+        onclick_action = "spy.qcb.close_interactive_session_and_retrieve()>>html.update()"
     elif "Retrieve" in button_text:
+        # For regular calculations, just retrieve results
         onclick_action = "spy.qcb.download_and_open_result()>>html.update()"
     else:
         onclick_action = "spy.qcb.run_current_cmd_with_pars()>>html.update()"

@@ -21,6 +21,27 @@ from pathlib import Path
 
 debug = bool(OV.GetParam("olex2.debug", False))
 
+# In debug mode, disable Python bytecode cache to ensure code changes are reflected
+if debug:
+    sys.dont_write_bytecode = True
+    print("[DEBUG] Python bytecode caching disabled")
+    
+    # Also try to clear existing cache files
+    try:
+        import shutil
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '__pycache__')
+        if os.path.exists(cache_dir):
+            shutil.rmtree(cache_dir)
+            print(f"[DEBUG] Cleared cache directory: {cache_dir}")
+        
+        # Clear qcrbox_plugin cache too
+        plugin_cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'qcrbox_plugin', '__pycache__')
+        if os.path.exists(plugin_cache):
+            shutil.rmtree(plugin_cache)
+            print(f"[DEBUG] Cleared plugin cache directory: {plugin_cache}")
+    except Exception as e:
+        print(f"[DEBUG] Could not clear cache: {e}")
+
 instance_path = OV.DataDir()
 
 try:
@@ -615,14 +636,32 @@ class olex2qcrbox(PT):
       if isinstance(calc_response, QCrBoxResponseCalculationsResponse):
         calc = calc_response.payload.calculations[0]
         print(f"Calculation status: {calc.status}")
+        
+        # Convert string status to CalculationStatus enum
+        try:
+          calc_status = CalculationStatus(calc.status)
+        except ValueError:
+          print(f"Unknown calculation status: {calc.status}")
+          calc_status = None
+        
         output_dataset_id = calc.output_dataset_id
         
         if output_dataset_id:
           print(f"Output dataset ID: {output_dataset_id}")
           
-          # Set the status and ID BEFORE calling download method
+          # Set the actual status from the calculation
           self.state.current_calculation_id = self.state.current_session_id
-          self.state.current_calculation_status = CalculationStatus.SUCCESSFUL
+          self.state.current_calculation_status = calc_status
+          
+          # Only proceed if calculation was successful
+          if calc_status != CalculationStatus.SUCCESSFUL:
+            print(f"Cannot retrieve results - calculation status is: {calc_status}")
+            # Clean up
+            self.state.current_session_id = None
+            self.state.current_session_dataset_id = None
+            self.state.is_interactive_session = False
+            gui_controller.update_run_button("Run Command", "#FFFFFF", True)
+            return False
           
           # Use existing download method
           result = self.download_and_open_result()
