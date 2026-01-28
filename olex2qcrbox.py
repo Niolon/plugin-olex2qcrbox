@@ -826,7 +826,8 @@ class olex2qcrbox(PT):
     """Convert CIF data names from DDL2 format (dots) to DDL1 format (underscores).
     
     Converts entries like _cell.length_a to _cell_length_a while preserving
-    string values and multiline strings.
+    numeric values (12.3), string values, and multiline strings.
+    Only converts dots within CIF data names (starting with _ at line beginning).
     
     Args:
         cif_text: The CIF file content as a string
@@ -834,9 +835,15 @@ class olex2qcrbox(PT):
     Returns:
         Modified CIF text with DDL1 format data names
     """
+    import re
+    
     lines = cif_text.split('\n')
     result_lines = []
     in_multiline_string = False
+    
+    # Pattern to match CIF data names: optional whitespace, underscore, then name with dots
+    # Captures the full data name including dots
+    data_name_pattern = re.compile(r'^(\s*)(_[a-zA-Z0-9_.\-]+)')
     
     for line in lines:
       # Check for multiline string delimiters (semicolon at start of line)
@@ -850,39 +857,22 @@ class olex2qcrbox(PT):
         result_lines.append(line)
         continue
       
-      # Process line character by character to handle quoted strings
-      modified_line = []
-      in_single_quote = False
-      in_double_quote = False
-      i = 0
-      
-      while i < len(line):
-        char = line[i]
+      # Check if line starts with a CIF data name
+      match = data_name_pattern.match(line)
+      if match:
+        # Extract the whitespace prefix and the data name
+        whitespace = match.group(1)
+        data_name = match.group(2)
+        rest_of_line = line[match.end():]
         
-        # Track quote state
-        if char == "'" and not in_double_quote:
-          in_single_quote = not in_single_quote
-          modified_line.append(char)
-        elif char == '"' and not in_single_quote:
-          in_double_quote = not in_double_quote
-          modified_line.append(char)
-        # Convert dots to underscores in data names (not in strings)
-        elif char == '.' and not in_single_quote and not in_double_quote:
-          # Check if this dot is part of a data name (preceded by _ or alphanumeric)
-          if i > 0 and (line[i-1] == '_' or line[i-1].isalnum()):
-            # Look ahead to see if followed by alphanumeric (part of data name)
-            if i + 1 < len(line) and (line[i+1].isalnum() or line[i+1] == '_'):
-              modified_line.append('_')
-            else:
-              modified_line.append(char)
-          else:
-            modified_line.append(char)
-        else:
-          modified_line.append(char)
+        # Convert dots to underscores in the data name only
+        converted_name = data_name.replace('.', '_')
         
-        i += 1
-      
-      result_lines.append(''.join(modified_line))
+        # Reconstruct the line
+        result_lines.append(whitespace + converted_name + rest_of_line)
+      else:
+        # No data name at start of line, keep as is
+        result_lines.append(line)
     
     return '\n'.join(result_lines)
   
