@@ -17,7 +17,7 @@ from .cif_utils import (
 
 from .state import PluginState
 
-from .gui_controller import GUIController
+from . import gui_controller
 
 from .session_manager import SessionManager
 
@@ -39,8 +39,8 @@ __all__ = [
     'validate_cif_data_name',
     # State Management
     'PluginState',
-    # GUI Controller
-    'GUIController',
+    # GUI Controller (functions)
+    'gui_controller',
     # Session Manager
     'SessionManager',
     # Calculation Runner

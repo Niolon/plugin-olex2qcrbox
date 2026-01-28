@@ -60,12 +60,12 @@ from qcrbox_plugin import (
     CommandExecution,
     UploadedDataset,
     PluginState,
-    GUIController,
     SessionManager,
     CalculationRunner,
     convert_cif_ddl2_to_ddl1,
     extract_cif_from_json_response,
     tests,
+    gui_controller,
 )
 
 # Force reload of html_templates to pick up changes
@@ -110,9 +110,6 @@ class olex2qcrbox(PT):
     # Initialize plugin state
     self.state = PluginState()
     
-    # Initialize GUI controller
-    self.gui = GUIController(OV, olx)
-    
     # Initialize session manager
     self.session_manager = SessionManager(
         self.qcrbox_adapter.client, 
@@ -126,12 +123,12 @@ class olex2qcrbox(PT):
     self.load_applications()
     
     # Initialize GUI
-    self.gui.update_run_button(
+    gui_controller.update_run_button(
         self.state.run_button_text,
         self.state.run_button_color,
         self.state.run_button_enabled
     )
-    self.gui.clear_parameter_panel()
+    gui_controller.clear_parameter_panel()
     self.update_help_file()
 
     if not from_outside:
@@ -154,7 +151,7 @@ class olex2qcrbox(PT):
   
   def get_olex2_colors(self):
     """Get Olex2 color scheme from settings."""
-    return self.gui.get_olex2_colors()
+    return gui_controller.get_olex2_colors()
   
   def load_applications(self):
     """Load available applications and commands from QCrBox API"""
@@ -261,14 +258,14 @@ class olex2qcrbox(PT):
     self.state.parameter_states = {}
     self.load_applications()
     # Update the GUI
-    self.gui.clear_parameter_panel()
-    self.gui.update_run_button("Run Command", "#FFFFFF", True)
+    gui_controller.clear_parameter_panel()
+    gui_controller.update_run_button("Run Command", "#FFFFFF", True)
     self.update_help_file()
     return True
   
   def update_help_file(self):
     """Generate and write dynamic help HTML file based on current state"""
-    self.gui.update_help_file(
+    gui_controller.update_help_file(
         qcrbox_available=self.qcrbox_adapter.health_check(),
         applications=self.state.applications,
         commands=self.state.commands,
@@ -286,7 +283,7 @@ class olex2qcrbox(PT):
   def set_selected_command(self, command_name):
     self.state.selected_command = command_name
     new_parameter_html = self.produce_parameter_html()
-    self.gui.update_parameter_panel(new_parameter_html)
+    gui_controller.update_parameter_panel(new_parameter_html)
     # Update help file when command changes
     self.update_help_file()
 
@@ -337,7 +334,7 @@ class olex2qcrbox(PT):
     
     # Reset all state
     self.state.reset_all_execution_state()
-    self.gui.update_run_button("Run Command", "#FFFFFF", True)
+    gui_controller.update_run_button("Run Command", "#FFFFFF", True)
     print("Session state reset complete")
   
   def list_active_sessions(self):
@@ -378,7 +375,7 @@ class olex2qcrbox(PT):
     
     # Reset local state
     self.state.reset_session_state()
-    self.gui.update_run_button("Run Command", "#FFFFFF", True)
+    gui_controller.update_run_button("Run Command", "#FFFFFF", True)
     print("\nLocal state reset")
     return (closed, failed)
   
@@ -411,12 +408,12 @@ class olex2qcrbox(PT):
           
           if status == CalculationStatus.SUCCESSFUL:
             self.state.polling_active = False
-            self.gui.update_run_button("Retrieve Results", "#00AA00", True)
+            gui_controller.update_run_button("Retrieve Results", "#00AA00", True)
             print("Calculation completed successfully!")
           
           elif status == CalculationStatus.FAILED:
             self.state.polling_active = False
-            self.gui.update_run_button("Calculation Failed (see log)", "#AA0000", True)
+            gui_controller.update_run_button("Calculation Failed (see log)", "#AA0000", True)
             print(f"Calculation FAILED!")
             print(f"Calculation metadata: {calc}")
             if hasattr(calc, 'error_message'):
@@ -424,7 +421,7 @@ class olex2qcrbox(PT):
           
           elif status == CalculationStatus.STOPPED:
             self.state.polling_active = False
-            self.gui.update_run_button("Calculation Stopped", "#FF8800", True)
+            gui_controller.update_run_button("Calculation Stopped", "#FF8800", True)
             print("Calculation was stopped")
         
         # Continue polling if still running
@@ -541,7 +538,7 @@ class olex2qcrbox(PT):
       webbrowser.open(vnc_url)
       
       # Update button to show session is active
-      self.gui.update_run_button("Close Session & Retrieve Results", "#FF8800", True)
+      gui_controller.update_run_button("Close Session & Retrieve Results", "#FF8800", True)
       
       return session_id
       
@@ -553,7 +550,7 @@ class olex2qcrbox(PT):
       self.state.current_session_id = None
       self.state.current_session_dataset_id = None
       self.state.is_interactive_session = False
-      self.gui.update_run_button("Run Command", "#FFFFFF", True)
+      gui_controller.update_run_button("Run Command", "#FFFFFF", True)
       return None
   
   def close_interactive_session_and_retrieve(self):
@@ -598,7 +595,7 @@ class olex2qcrbox(PT):
         self.state.current_session_id = None
         self.state.current_session_dataset_id = None
         self.state.is_interactive_session = False
-        self.gui.update_run_button("Run Command", "#FFFFFF", True)
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return True  # Successfully closed, just no output
       
       # Now retrieve the output - the session should have created an output dataset
@@ -642,7 +639,7 @@ class olex2qcrbox(PT):
           self.state.current_session_id = None
           self.state.current_session_dataset_id = None
           self.state.is_interactive_session = False
-          self.gui.update_run_button("Run Command", "#FFFFFF", True)
+          gui_controller.update_run_button("Run Command", "#FFFFFF", True)
           return False
       else:
         print("Failed to get calculation details")
@@ -650,7 +647,7 @@ class olex2qcrbox(PT):
         self.state.current_session_id = None
         self.state.current_session_dataset_id = None
         self.state.is_interactive_session = False
-        self.gui.update_run_button("Run Command", "#FFFFFF", True)
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return False
         
     except Exception as e:
@@ -661,7 +658,7 @@ class olex2qcrbox(PT):
       self.state.current_session_id = None
       self.state.current_session_dataset_id = None
       self.state.is_interactive_session = False
-      self.gui.update_run_button("Run Command", "#FFFFFF", True)
+      gui_controller.update_run_button("Run Command", "#FFFFFF", True)
       return False
   
   def update_run_button(self, text, color, enabled):
@@ -669,7 +666,7 @@ class olex2qcrbox(PT):
     self.state.run_button_text = text
     self.state.run_button_color = color
     self.state.run_button_enabled = enabled
-    self.gui.update_run_button(text, color, enabled)
+    gui_controller.update_run_button(text, color, enabled)
   
   def download_and_open_result(self):
     """Download the result CIF from completed calculation and open in Olex2"""
@@ -748,9 +745,9 @@ class olex2qcrbox(PT):
                     f.write(file_content)
                   print(f"Saved to: {output_path} (converted to DDL1 format)")
                   print("Opening in Olex2...")
-                  self.gui.open_file_in_olex2(output_path)
+                  gui_controller.open_file_in_olex2(output_path)
                   # Reset button for next calculation
-                  self.gui.update_run_button("Run Command", "#FFFFFF", True)
+                  gui_controller.update_run_button("Run Command", "#FFFFFF", True)
                   return True
         
         print("Could not find file content in JSON response")
@@ -767,9 +764,9 @@ class olex2qcrbox(PT):
           f.write(file_content)
         print(f"Saved to: {output_path} (converted to DDL1 format)")
         print("Opening in Olex2...")
-        self.gui.open_file_in_olex2(output_path)
+        gui_controller.open_file_in_olex2(output_path)
         # Reset button for next calculation
-        self.gui.update_run_button("Run Command", "#FFFFFF", True)
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return True
       
     except Exception as e:
@@ -925,7 +922,7 @@ class olex2qcrbox(PT):
       self.state.polling_active = True
       
       # Update button to show running state
-      self.gui.update_run_button("Calculation Running...", "#0088FF", False)
+      gui_controller.update_run_button("Calculation Running...", "#0088FF", False)
       
       # Start background polling
       import threading
@@ -939,7 +936,7 @@ class olex2qcrbox(PT):
       print(f"Failed to run command: {e}")
       import traceback
       traceback.print_exc()
-      self.gui.update_run_button("Run Command", "#FFFFFF", True)
+      gui_controller.update_run_button("Run Command", "#FFFFFF", True)
       return None
   
   def produce_parameter_html(self):

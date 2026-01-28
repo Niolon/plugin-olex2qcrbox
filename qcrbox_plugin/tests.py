@@ -97,17 +97,15 @@ def test_gui_controller(OV, olx):
         OV: OlexFunctions instance
         olx: olex module
     """
-    from .gui_controller import GUIController
+    from . import gui_controller
     
     print("\n" + "="*60)
     print("Testing GUI Controller")
     print("="*60)
     
-    gui = GUIController(OV, olx)
-    
     # Test color retrieval
     print(f"\nTest 1: Get colors")
-    colors = gui.get_olex2_colors()
+    colors = gui_controller.get_olex2_colors()
     print(f"  Colors retrieved: {len(colors)} keys")
     print(f"  Has bg_color: {'bg_color' in colors}")
     print(f"  Has font_color: {'font_color' in colors}")
@@ -116,7 +114,7 @@ def test_gui_controller(OV, olx):
     # Test button update
     print(f"\nTest 2: Update button")
     try:
-        gui.update_run_button("Test Button", "#FF0000", True)
+        gui_controller.update_run_button("Test Button", "#FF0000", True)
         print(f"  Result: ✓ PASS (no exceptions)")
     except Exception as e:
         print(f"  Result: ✗ FAIL ({e})")
