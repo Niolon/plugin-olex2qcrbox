@@ -317,6 +317,32 @@ class olex2qcrbox(PT):
     # Ensure command_id is always an integer for consistency
     command_id = int(command_id)
     print(f"Setting parameter state for command {command_id}, {parameter_name} to {value}")
+    
+    # Check if this is a file parameter that needs to be uploaded
+    command_obj = next((cmd for cmd in self.state.commands if cmd.id == command_id), None)
+    if command_obj and hasattr(command_obj.parameters, 'additional_properties'):
+      param_info = command_obj.parameters.additional_properties.get(parameter_name)
+      if param_info:
+        dtype = param_info.get('dtype', '')
+        
+        # If it's a data_file parameter and value looks like a file path, upload it
+        if dtype == 'QCrBox.data_file' and value and isinstance(value, str):
+          if os.path.exists(value) and os.path.isfile(value):
+            print(f"Uploading file: {value}")
+            try:
+              workflows = QCrBoxWorkflows(self.qcrbox_adapter.client)
+              uploaded = workflows.upload_file(value)
+              print(f"Uploaded {uploaded.file_name} -> dataset_id: {uploaded.dataset_id}, file_id: {uploaded.data_file_id}")
+              
+              # Store the file_id instead of the path
+              value = {'data_file_id': uploaded.data_file_id}
+              print(f"Converted file path to data_file_id: {uploaded.data_file_id}")
+            except Exception as e:
+              print(f"Failed to upload file: {e}")
+              import traceback
+              traceback.print_exc()
+              # Keep the original value on failure
+    
     if command_id in self.state.parameter_states:
       self.state.parameter_states[command_id][parameter_name] = value
     else:
@@ -326,6 +352,18 @@ class olex2qcrbox(PT):
     # Ensure command_id is always an integer for consistency
     command_id = int(command_id)
     return self.state.parameter_states.get(command_id, {}).get(parameter_name, None)
+  
+  def get_file_parameter_status(self, command_id, parameter_name):
+    """Get display status for file parameters (Missing/Uploaded)."""
+    command_id = int(command_id)
+    value = self.state.parameter_states.get(command_id, {}).get(parameter_name)
+    
+    if value is None or value == '':
+      return "<i>Missing</i>"
+    elif isinstance(value, dict) and 'data_file_id' in value:
+      return "<i>Uploaded</i>"
+    else:
+      return "<i>Unknown status</i>"
   
   def is_command_interactive(self, command_obj):
     """Check if a command is interactive based on its metadata."""

@@ -56,6 +56,29 @@ NUMBER_PARAMETER_TEMPLATE = dedent("""
   </td>
 """)
 
+# Template for file parameters (status display with browse button)
+FILE_PARAMETER_TEMPLATE = dedent("""
+  <td name="{parameter_name}:label" width="25%">
+    <b>{parameter_name}</b>{required_marker}
+  </td>
+  <td name="{parameter_name}:control" width="75%">
+    <font size="$GetVar('HtmlFontSizeControls')">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td width="80%" name="{parameter_name}_status">
+          $spy.qcb.get_file_parameter_status({command_id}, '{parameter_name}')
+        </td>
+        <td width="20%" align="right">
+          <a href="spy.qcb.set_parameter_state({command_id}, '{parameter_name}', spy.gui.dialog.FileOpen('Select {parameter_name}', 'All files|*.*', '$FilePath()'))>>html.Update()">
+            <button>Browse...</button>
+          </a>
+        </td>
+      </tr>
+    </table>
+    </font>
+  </td>
+""")
+
 
 def generate_bool_parameter(command_id: int, parameter_name: str, description: str = "", required: bool = False) -> str:
     """Generate HTML for a boolean parameter.
@@ -76,6 +99,24 @@ def generate_bool_parameter(command_id: int, parameter_name: str, description: s
         required_marker=required_marker
     )
 
+def generate_file_parameter(command_id: int, parameter_name: str, description: str = "", required: bool = False) -> str:
+    """Generate HTML for a file parameter with browse button.
+    
+    Args:
+        command_id: The command ID
+        parameter_name: Name of the parameter
+        description: Description text for the parameter (stored but not displayed)
+        required: Whether the parameter is required
+        
+    Returns:
+        HTML string for the parameter with file selection dialog
+    """
+    required_marker = " *" if required else ""
+    return FILE_PARAMETER_TEMPLATE.format(
+        command_id=command_id,
+        parameter_name=parameter_name,
+        required_marker=required_marker
+    )
 
 def generate_string_parameter(command_id: int, parameter_name: str, description: str = "", required: bool = False) -> str:
     """Generate HTML for a string parameter.
@@ -135,7 +176,14 @@ def generate_parameter_html(command_id: int, parameter_name: str, parameter_dtyp
     """
     if parameter_dtype == "bool":
         return generate_bool_parameter(command_id, parameter_name, description)
-    elif parameter_dtype in ["str", "QCrBox.cif_data_file", "QCrBox.output_cif", "QCrBox.data_file"]:
+    elif parameter_dtype == "QCrBox.cif_data_file":
+        # CIF input files are auto-filled, use simple string input
+        return generate_string_parameter(command_id, parameter_name, description, required)
+    elif parameter_dtype == "QCrBox.data_file":
+        # Generic file parameters get browse button
+        return generate_file_parameter(command_id, parameter_name, description, required)
+    elif parameter_dtype in ["str", "QCrBox.output_cif"]:
+        # output_cif is a string that determines internal file name
         return generate_string_parameter(command_id, parameter_name, description, required)
     elif parameter_dtype in ["int", "float"]:
         return generate_number_parameter(command_id, parameter_name, description, required)
