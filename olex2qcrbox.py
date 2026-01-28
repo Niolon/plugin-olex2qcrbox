@@ -25,22 +25,6 @@ debug = bool(OV.GetParam("olex2.debug", False))
 if debug:
     sys.dont_write_bytecode = True
     print("[DEBUG] Python bytecode caching disabled")
-    
-    # Also try to clear existing cache files
-    try:
-        import shutil
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '__pycache__')
-        if os.path.exists(cache_dir):
-            shutil.rmtree(cache_dir)
-            print(f"[DEBUG] Cleared cache directory: {cache_dir}")
-        
-        # Clear qcrbox_plugin cache too
-        plugin_cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'qcrbox_plugin', '__pycache__')
-        if os.path.exists(plugin_cache):
-            shutil.rmtree(plugin_cache)
-            print(f"[DEBUG] Cleared plugin cache directory: {plugin_cache}")
-    except Exception as e:
-        print(f"[DEBUG] Could not clear cache: {e}")
 
 instance_path = OV.DataDir()
 
@@ -50,6 +34,23 @@ try:
 except:
   from_outside = True
   p_path = os.path.dirname(os.path.abspath("__file__"))
+
+# Clear cache after p_path is determined
+if debug:
+    try:
+        import shutil
+        cache_dir = os.path.join(p_path, '__pycache__')
+        if os.path.exists(cache_dir):
+            shutil.rmtree(cache_dir)
+            print(f"[DEBUG] Cleared cache directory: {cache_dir}")
+        
+        # Clear qcrbox_plugin cache too
+        plugin_cache = os.path.join(p_path, 'qcrbox_plugin', '__pycache__')
+        if os.path.exists(plugin_cache):
+            shutil.rmtree(plugin_cache)
+            print(f"[DEBUG] Cleared plugin cache directory: {plugin_cache}")
+    except Exception as e:
+        print(f"[DEBUG] Could not clear cache: {e}")
 
 if p_path not in sys.path:
     sys.path.insert(0, p_path)
@@ -403,19 +404,20 @@ class olex2qcrbox(PT):
     print("\nLocal state reset")
     return (closed, failed)
   
-  def poll_calculation_status(self):
-    """Poll the current calculation status and update GUI"""
-    print(f"[POLL] Checking calculation {self.state.current_calculation_id}, polling_active={self.state.polling_active}")
+  def check_calculation_status(self):
+    """Check the current calculation status once and update GUI accordingly.
     
-    if not self.state.current_calculation_id or not self.state.polling_active:
-      print("[POLL] Stopping - no calculation ID or polling inactive")
+    This is called manually by the user clicking the 'Check Status' button.
+    """
+    if not self.state.current_calculation_id:
+      print("No active calculation to check")
       return
     
     try:
       from qcrboxapiclient.api import calculations
       from qcrboxapiclient.models.q_cr_box_response_calculations_response import QCrBoxResponseCalculationsResponse
       
-      print(f"[POLL] Fetching status from API...")
+      print(f"Checking calculation {self.state.current_calculation_id} status...")
       response = calculations.get_calculation_by_id.sync(
         id=self.state.current_calculation_id,
         client=self.qcrbox_adapter.client
@@ -424,50 +426,46 @@ class olex2qcrbox(PT):
       if isinstance(response, QCrBoxResponseCalculationsResponse):
         calc = response.payload.calculations[0]
         status = calc.status
-        print(f"[POLL] Current status: {status}")
+        print(f"Current status: {status}")
         
-        if status != self.state.current_calculation_status:
-          self.state.current_calculation_status = status
-          print(f"[POLL] Status changed: {status}")
-          
-          if status == CalculationStatus.SUCCESSFUL:
-            self.state.polling_active = False
-            gui_controller.update_run_button("Retrieve Results", "#00AA00", True)
-            print("Calculation completed successfully!")
-          
-          elif status == CalculationStatus.FAILED:
-            self.state.polling_active = False
-            gui_controller.update_run_button("Calculation Failed (see log)", "#AA0000", True)
-            print(f"Calculation FAILED!")
-            print(f"Calculation metadata: {calc}")
-            if hasattr(calc, 'error_message'):
-              print(f"Error message: {calc.error_message}")
-          
-          elif status == CalculationStatus.STOPPED:
-            self.state.polling_active = False
-            gui_controller.update_run_button("Calculation Stopped", "#FF8800", True)
-            print("Calculation was stopped")
+        self.state.current_calculation_status = status
         
-        # Continue polling if still running
-        if self.state.polling_active:
-          print(f"[POLL] Scheduling next poll in 2 seconds...")
-          import threading
-          timer = threading.Timer(2.0, self.poll_calculation_status)
-          timer.daemon = True
-          timer.start()
-        else:
-          print(f"[POLL] Polling complete")
+        if status == CalculationStatus.SUCCESSFUL:
+          gui_controller.update_run_button("Retrieve Results", "#00AA00", True)
+          print("Calculation completed successfully!")
+        
+        elif status == CalculationStatus.FAILED:
+          gui_controller.update_run_button("Calculation Failed (see log)", "#AA0000", True)
+          print(f"Calculation FAILED!")
+          print(f"Calculation metadata: {calc}")
+          if hasattr(calc, 'error_message'):
+            print(f"Error message: {calc.error_message}")
+        
+        elif status == CalculationStatus.STOPPED:
+          gui_controller.update_run_button("Calculation Stopped", "#FF8800", True)
+          print("Calculation was stopped")
+        
+        elif status == CalculationStatus.RUNNING:
+          gui_controller.update_run_button("Check Status", "#0088FF", True)
+          print("Calculation still running - click 'Check Status' again to refresh")
       
     except Exception as e:
-      print(f"[POLL ERROR] Error polling calculation status: {e}")
+      print(f"Error checking calculation status: {e}")
       import traceback
       traceback.print_exc()
-      self.state.polling_active = False
+  
+  def reset_calculation_state(self):
+    """Reset calculation state after failed/stopped calculation to allow retry"""
+    print("Resetting calculation state...")
+    self.state.reset_calculation_state()
+    self.state.reset_session_state()
+    gui_controller.update_run_button("Run Command", "#FFFFFF", True)
+    print("Ready for new calculation")
+    return True
   
   def still_running_calculation(self):
-    """Show message when user clicks disabled button during calculation"""
-    print("Still running calculation")
-    return "Still running calculation"
+    """Called when user clicks the 'Check Status' button - just check status"""
+    self.check_calculation_status()
   
   def start_interactive_session(self):
     """Start an interactive session and open browser to VNC URL."""
@@ -656,10 +654,11 @@ class olex2qcrbox(PT):
           # Only proceed if calculation was successful
           if calc_status != CalculationStatus.SUCCESSFUL:
             print(f"Cannot retrieve results - calculation status is: {calc_status}")
-            # Clean up
+            # Clean up all state
             self.state.current_session_id = None
             self.state.current_session_dataset_id = None
             self.state.is_interactive_session = False
+            self.state.reset_calculation_state()
             gui_controller.update_run_button("Run Command", "#FFFFFF", True)
             return False
           
@@ -677,18 +676,20 @@ class olex2qcrbox(PT):
         else:
           print("No output dataset found from interactive session")
           print("This may be normal if no output CIF was created during the session")
-          # Still clean up
+          # Clean up all state
           self.state.current_session_id = None
           self.state.current_session_dataset_id = None
           self.state.is_interactive_session = False
+          self.state.reset_calculation_state()
           gui_controller.update_run_button("Run Command", "#FFFFFF", True)
           return False
       else:
         print("Failed to get calculation details")
-        # Clean up
+        # Clean up all state
         self.state.current_session_id = None
         self.state.current_session_dataset_id = None
         self.state.is_interactive_session = False
+        self.state.reset_calculation_state()
         gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return False
         
@@ -696,10 +697,11 @@ class olex2qcrbox(PT):
       print(f"Failed to close interactive session and retrieve results: {e}")
       import traceback
       traceback.print_exc()
-      # Clean up
+      # Clean up all state
       self.state.current_session_id = None
       self.state.current_session_dataset_id = None
       self.state.is_interactive_session = False
+      self.state.reset_calculation_state()
       gui_controller.update_run_button("Run Command", "#FFFFFF", True)
       return False
   
@@ -741,6 +743,10 @@ class olex2qcrbox(PT):
       output_dataset_id = calc.output_dataset_id
       if not output_dataset_id:
         print("No output dataset found in calculation results")
+        print("This command may not produce output files, or the calculation did not complete properly")
+        # Reset state so user can continue
+        self.state.reset_calculation_state()
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return False
       
       print(f"Output dataset ID: {output_dataset_id}")
@@ -756,6 +762,9 @@ class olex2qcrbox(PT):
       
       if download_response.status_code != 200:
         print(f"Failed to download dataset: HTTP {download_response.status_code}")
+        # Reset state so user can retry
+        self.state.reset_calculation_state()
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return False
       
       # Debug: Check what we actually got
@@ -788,11 +797,16 @@ class olex2qcrbox(PT):
                   print(f"Saved to: {output_path} (converted to DDL1 format)")
                   print("Opening in Olex2...")
                   gui_controller.open_file_in_olex2(output_path)
-                  # Reset button for next calculation
+                  # Reset calculation state for next calculation
+                  self.state.reset_calculation_state()
                   gui_controller.update_run_button("Run Command", "#FFFFFF", True)
                   return True
         
-        print("Could not find file content in JSON response")
+        print("Could not find CIF file content in JSON response")
+        print("Dataset may not contain CIF output files")
+        # Reset state so user can continue
+        self.state.reset_calculation_state()
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return False
         
       except json.JSONDecodeError:
@@ -807,7 +821,8 @@ class olex2qcrbox(PT):
         print(f"Saved to: {output_path} (converted to DDL1 format)")
         print("Opening in Olex2...")
         gui_controller.open_file_in_olex2(output_path)
-        # Reset button for next calculation
+        # Reset calculation state for next calculation
+        self.state.reset_calculation_state()
         gui_controller.update_run_button("Run Command", "#FFFFFF", True)
         return True
       
@@ -815,6 +830,9 @@ class olex2qcrbox(PT):
       print(f"Failed to download and open result: {e}")
       import traceback
       traceback.print_exc()
+      # Reset state so user can retry or start new calculation
+      self.state.reset_calculation_state()
+      gui_controller.update_run_button("Run Command", "#FFFFFF", True)
       return False
   
   def convert_cif_ddl2_to_ddl1(self, cif_text):
@@ -958,19 +976,13 @@ class olex2qcrbox(PT):
       
       print(f"Command started! Calculation ID: {execution.calculation_id}")
       
-      # Store calculation info and start polling
+      # Store calculation info
       self.state.current_calculation_id = execution.calculation_id
       self.state.current_calculation_status = CalculationStatus.RUNNING
-      self.state.polling_active = True
       
-      # Update button to show running state
-      gui_controller.update_run_button("Calculation Running...", "#0088FF", False)
-      
-      # Start background polling
-      import threading
-      timer = threading.Timer(2.0, self.poll_calculation_status)
-      timer.daemon = True
-      timer.start()
+      # Update button to allow manual status checking
+      gui_controller.update_run_button("Check Status", "#0088FF", True)
+      print("Calculation started! Click 'Check Status' to check progress.")
       
       return execution
       

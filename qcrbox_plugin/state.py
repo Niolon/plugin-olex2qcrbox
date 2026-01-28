@@ -22,7 +22,6 @@ class PluginState:
     # Calculation state (non-interactive commands)
     current_calculation_id: Optional[str] = None
     current_calculation_status: Optional[CalculationStatus] = None
-    polling_active: bool = False
     
     # Interactive session state
     current_session_id: Optional[str] = None
@@ -38,7 +37,6 @@ class PluginState:
         """Reset calculation-related state."""
         self.current_calculation_id = None
         self.current_calculation_status = None
-        self.polling_active = False
     
     def reset_session_state(self):
         """Reset interactive session state."""
