@@ -17,6 +17,7 @@ class PluginState:
     commands: list = field(default_factory=list)
     selected_command: Optional[str] = None
     parameter_states: dict = field(default_factory=dict)
+    qcrbox_available: bool = False  # Cached health check result
     
     # Calculation state (non-interactive commands)
     current_calculation_id: Optional[str] = None

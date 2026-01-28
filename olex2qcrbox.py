@@ -119,6 +119,9 @@ class olex2qcrbox(PT):
     # Initialize calculation runner
     self.calc_runner = CalculationRunner(self.qcrbox_adapter.client)
     
+    # Cache health check result to avoid repeated network calls
+    self.state.qcrbox_available = self.qcrbox_adapter.health_check()
+    
     # Load applications and commands from API
     self.load_applications()
     
@@ -256,6 +259,8 @@ class olex2qcrbox(PT):
     self.state.commands = []
     self.state.selected_command = None
     self.state.parameter_states = {}
+    # Cache health check result
+    self.state.qcrbox_available = self.qcrbox_adapter.health_check()
     self.load_applications()
     # Update the GUI
     gui_controller.clear_parameter_panel()
@@ -266,7 +271,7 @@ class olex2qcrbox(PT):
   def update_help_file(self):
     """Generate and write dynamic help HTML file based on current state"""
     gui_controller.update_help_file(
-        qcrbox_available=self.qcrbox_adapter.health_check(),
+        qcrbox_available=self.state.qcrbox_available,
         applications=self.state.applications,
         commands=self.state.commands,
         selected_command=self.state.selected_command
@@ -284,8 +289,6 @@ class olex2qcrbox(PT):
     self.state.selected_command = command_name
     new_parameter_html = self.produce_parameter_html()
     gui_controller.update_parameter_panel(new_parameter_html)
-    # Update help file when command changes
-    self.update_help_file()
 
 
   def set_parameter_state(self, command_id, parameter_name, value): 
