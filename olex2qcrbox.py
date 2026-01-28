@@ -46,6 +46,7 @@ OV.SetVar('olex2qcrbox_plugin_path', p_path)
 
 from PluginTools import PluginTools as PT
 import inspect
+import importlib
 
 from qcrbox_plugin import (
     QCrBoxAPIAdapter,
@@ -54,6 +55,11 @@ from qcrbox_plugin import (
     CommandExecution,
     UploadedDataset,
 )
+
+# Force reload of html_templates to pick up changes
+import qcrbox_plugin.html_templates
+importlib.reload(qcrbox_plugin.html_templates)
+
 from qcrbox_plugin.html_templates import (
     generate_parameter_html, 
     generate_run_button_html,
@@ -133,6 +139,32 @@ class olex2qcrbox(PT):
 
   def check_available(self):
     return self.qcrbox_adapter.health_check()
+  
+  def get_olex2_colors(self):
+    """Get Olex2 color scheme from settings."""
+    try:
+      return {
+        'bg_color': olx.GetVar('HtmlBgColour', '#222222'),
+        'font_color': olx.GetVar('HtmlFontColour', '#ffffff'),
+        'table_bg': olx.GetVar('HtmlTableBgColour', '#222222'),
+        'highlight': olx.GetVar('HtmlHighlightColour', '#ff8888'),
+        'link_color': olx.GetVar('HtmlLinkColour', '#ababff'),
+        'font_name': olx.GetVar('HtmlFontName', 'Bahnschrift'),
+        'error_color': OV.GetParam('gui.red', '#ff6666').hexadecimal if hasattr(OV.GetParam('gui.red', '#ff6666'), 'hexadecimal') else '#ff6666',
+        'secondary_color': OV.GetParam('gui.grey', '#aaaaaa').hexadecimal if hasattr(OV.GetParam('gui.grey', '#aaaaaa'), 'hexadecimal') else '#aaaaaa',
+      }
+    except Exception as e:
+      print(f"Warning: Could not load Olex2 colors, using defaults: {e}")
+      return {
+        'bg_color': '#222222',
+        'font_color': '#ffffff',
+        'table_bg': '#222222',
+        'highlight': '#ff8888',
+        'link_color': '#ababff',
+        'font_name': 'Bahnschrift',
+        'error_color': '#ff6666',
+        'secondary_color': '#aaaaaa',
+      }
   
   def load_applications(self):
     """Load available applications and commands from QCrBox API"""
@@ -249,26 +281,30 @@ class olex2qcrbox(PT):
   def update_help_file(self):
     """Generate and write dynamic help HTML file based on current state"""
     try:
+      # Get current color scheme
+      colors = self.get_olex2_colors()
+      
       # Generate help content using template module
       help_content = generate_help_content_html(
           qcrbox_available=self.qcrbox_adapter.health_check(),
           applications=self.applications,
           commands=self.commands,
-          selected_command=self.selected_command
+          selected_command=self.selected_command,
+          colors=colors
       )
       
       print(f"[DEBUG] Help content length: {len(help_content)}")
       print(f"[DEBUG] Help content preview: {help_content[:200]}")
       
       # Wrap in full HTML template
-      help_html = generate_help_file_html(help_content)
+      help_html = generate_help_file_html(help_content, colors)
       
       print(f"[DEBUG] Help HTML length: {len(help_html)}")
-      print(f"[DEBUG] Writing help file...")
+      print(f"[DEBUG] Registering help content...")
       
-      # Write to file
-      OV.write_to_olex("qcrbox_command_help.htm", help_html)
-      print(f"[DEBUG] Help file written successfully")
+      # Register help content as Olex2 variable (not VFS file)
+      olx.SetVar('qcrbox_command_help', help_html)
+      print(f"[DEBUG] Help content registered successfully")
       
     except Exception as e:
       print(f"[ERROR] Failed to update help file: {e}")

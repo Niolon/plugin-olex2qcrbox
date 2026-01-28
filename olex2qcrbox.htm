@@ -1,9 +1,11 @@
 
 <!-- #include tool-top gui/blocks/tool-top.htm;image=#image;onclick=#onclick;1; -->
 
-<!-- #include tool-row-help gui/blocks/tool-row-help.htm;name=qcrbox_command_help.htm; help_ext=qcrbox_command_help;1; -->
-
-  <td colspan=4>
+<!-- #include tool-row gui/blocks/tool-row.htm;1; -->
+  <td valign='top' width="$GetVar(HtmlTableFirstcolWidth)" align='center' bgcolor="$GetVar(HtmlTableFirstcolColour)">
+    $spy.MakeHoverButton('btn-info','spy.make_help_box -name=qcrbox_command_help -popout=False')
+  </td>
+  <td colspan=3>
     <table width="100%" border="0" cellpadding="0" cellspacing="0">
       <tr>
         <td width="95%">
@@ -23,7 +25,6 @@
       </tr>
     </table>
   </td>
-
 <!-- #include row_table_off gui/blocks/row_table_off.htm;1; -->
 
 <!-- #include qcb-parameters qcb-parameters.htm;1; -->

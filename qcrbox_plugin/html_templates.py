@@ -183,44 +183,28 @@ def generate_run_button_html(button_text: str, button_color: str, enabled: bool)
       <!-- #include row_table_off gui/blocks/row_table_off.htm;1; -->
     ''').strip()
 
-def generate_help_file_html(help_content: str) -> str:
-    """
-    Wrap help content in Olex2 help file template structure.
+def generate_help_file_html(help_content: str, colors: dict) -> str:
+    """Wrap help content in Olex2 help file template structure.
     
     Args:
         help_content: HTML content to display in the help file body
+        colors: Dictionary of Olex2 color settings
         
     Returns:
         Complete HTML string with Olex2 help template tags
     """
     return dedent(f'''
-      <SWITCHINFOS SRC="qcrbox_command_help.htm"/>
-      
-      <body link="#ababff" bgcolor='#222222'>
-      <font size='3' color='#333355' face="Bahnschrift">
-      <table bgcolor='#222222' width='100%%' border='0' cellspacing='5' cellpadding='5'>
-      <tr bgcolor='#222222'>
-      <td bgcolor='#222222'>
-      <font color='white' size='6' >
-      <b>
-      QCrBox Command Help
-      </b>
-      </font>
-      </td>
-      </tr>
-      </table>
-      
-      <table bgcolor='#222222' width='100%%' border='0' cellspacing='5' cellpadding='5'>
-      <tr bgcolor='#222222'>
-      <td bgcolor='#222222'>
-      <font color='#ffffff'>
+      <body link="{colors['link_color']}" bgcolor='{colors['bg_color']}'>
+      <font size='3' color='{colors['font_color']}' face="{colors['font_name']}">
+      <table bgcolor='{colors['table_bg']}' width='100%%' border='0' cellspacing='5' cellpadding='5'>
+      <tr bgcolor='{colors['table_bg']}'>
+      <td bgcolor='{colors['table_bg']}'>
       {help_content}
-      </font>
       </td>
       </tr>
       </table>
+      </font>
       </body>
-      <SWITCHINFOE/>
     ''')
 
 
@@ -228,24 +212,38 @@ def generate_help_content_html(
     qcrbox_available: bool,
     applications: list,
     commands: list,
-    selected_command: str = None
+    selected_command: str = None,
+    colors: dict = None
 ) -> str:
-    """
-    Generate context-aware help content HTML based on current state.
+    """Generate context-aware help content HTML based on current state.
     
     Args:
         qcrbox_available: Whether the QCrBox server is accessible
         applications: List of application objects from the API
         commands: List of command dictionaries
         selected_command: Currently selected command name (None if no selection)
+        colors: Dictionary of Olex2 color settings (optional, uses defaults if None)
         
     Returns:
         HTML string with help content for the current state
     """
+    # Use default colors if none provided
+    if colors is None:
+        colors = {
+            'bg_color': '#222222',
+            'font_color': '#ffffff',
+            'table_bg': '#222222',
+            'highlight': '#ff8888',
+            'link_color': '#ababff',
+            'font_name': 'Bahnschrift',
+            'error_color': '#ff6666',
+            'secondary_color': '#aaaaaa',
+        }
+    
     # State 1: Server not available
     if not qcrbox_available:
-        return dedent('''
-        <font color='#FF6666' size='4'><b>QCrBox Server Not Available</b></font><br><br>
+        return dedent(f'''
+        <font color='{colors['error_color']}' size='4'><b>QCrBox Server Not Available</b></font><br><br>
         The QCrBox server is not running or not accessible.<br>
         Please start the QCrBox server and ensure it is reachable.
         ''')
@@ -268,40 +266,33 @@ def generate_help_content_html(
     # State 3: Command selected - show full details
     # selected_command format is "command_name(application_slug)"
     command_obj = next((cmd for cmd in commands if f"{cmd.name}({cmd.application})" == selected_command), None)
+    
     if not command_obj:
-        return "<font color='#FF6666'>Command not found</font>"
+        return f"<font color='{colors['error_color']}'>Command not found</font>"
     
     app = next((a for a in applications if a.id == command_obj.application_id), None)
     if not app:
-        return "<font color='#FF6666'>Application not found</font>"
+        return f"<font color='{colors['error_color']}'>Application not found</font>"
     
     help_parts = [
-        f"<font size='4'><b>{app.name}</b></font><br>",
-        f"<b>Command:</b> {command_obj.name}<br><br>"
+        f"<font size='5' color='{colors['font_color']}'><b>{command_obj.name}</b></font><br><br>"
     ]
     
+    # Command description
     if command_obj.description:
         help_parts.append(f"{command_obj.description}<br><br>")
-    
-    if app.description:
-        help_parts.append(f"{app.description}<br>")
-    help_parts.append(f"<b>Version:</b> {app.version}<br>")
-    if app.url:
-        help_parts.append(f"<b>URL:</b> {app.url}<br>")
-    if app.doi:
-        help_parts.append(f"<b>DOI:</b> {app.doi}<br>")
     
     # Add parameter descriptions if any
     if hasattr(command_obj.parameters, 'additional_properties'):
         param_descs = []
         for param_name, param_info in command_obj.parameters.additional_properties.items():
             dtype = param_info.get('dtype', '')
-            # Skip CIF input parameters
-            if dtype == 'QCrBox.cif_data_file':
+            # Skip CIF input and output parameters (auto-filled)
+            if dtype in ['QCrBox.cif_data_file', 'QCrBox.output_cif']:
                 continue
             description = param_info.get('description', '')
             required = param_info.get('required', False)
-            req_marker = " <font color='#FF8888'>(required)</font>" if required else ""
+            req_marker = f" <font color='{colors['highlight']}'>(required)</font>" if required else ""
             default_val = param_info.get('default_value')
             default_str = f" [default: {default_val}]" if default_val not in [None, '', 'None'] else ""
             
@@ -309,7 +300,19 @@ def generate_help_content_html(
                 param_descs.append(f"<br>• <b>{param_name}</b>{req_marker}{default_str}: {description}")
         
         if param_descs:
-            help_parts.append("<br><br><b>Parameters:</b>")
+            help_parts.append("<b>Parameters:</b>")
             help_parts.extend(param_descs)
+            help_parts.append("<br><br>")
+    
+    # Application information (Provided by)
+    help_parts.append(f"<font size='2' color='{colors['secondary_color']}'>")
+    help_parts.append(f"<b>Provided by:</b> {app.name} v{app.version}<br>")
+    if app.description:
+        help_parts.append(f"{app.description}<br>")
+    if app.url:
+        help_parts.append(f"<b>URL:</b> {app.url}<br>")
+    if app.doi:
+        help_parts.append(f"<b>DOI:</b> {app.doi}<br>")
+    help_parts.append(f"</font>")
     
     return ''.join(help_parts)
