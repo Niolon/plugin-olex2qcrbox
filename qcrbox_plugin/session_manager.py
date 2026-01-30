@@ -59,13 +59,15 @@ class SessionManager:
     def start_interactive_session(
         self,
         command_obj,
-        arguments: dict
+        arguments: dict,
+        vnc_port: Optional[str] = None
     ) -> Optional[str]:
         """Start an interactive session and open browser to VNC URL.
         
         Args:
             command_obj: Command object with application and version info
             arguments: Command arguments dictionary
+            vnc_port: VNC port from application's gui_port (optional)
             
         Returns:
             Session ID on success, None on failure
@@ -95,14 +97,23 @@ class SessionManager:
             session_id = response.payload.interactive_session_id
             print(f"Interactive session created! Session ID: {session_id}")
             
-            # Construct VNC URL from stored qcrbox_url
-            qcrbox_base = self.qcrbox_url.replace('http://', '').replace('https://', '').split(':')[0]
-            vnc_url = f"http://{qcrbox_base}:12004/vnc.html?path=vnc&autoconnect=true&resize=remote&reconnect=true&show_dot=true"
+            # Construct VNC URL from application's gui_port
+            if not vnc_port:
+                print(f"[ERROR] No gui_port found for interactive application. Cannot connect to VNC session.")
+                print(f"[ERROR] The application must define a gui_port to support interactive sessions.")
+                # Clean up the session that was just created
+                try:
+                    print(f"Cleaning up session {session_id}...")
+                    close_interactive_session.sync(client=self.client, id=session_id)
+                except Exception as cleanup_error:
+                    print(f"Warning: Failed to clean up session: {cleanup_error}")
+                return None
             
-            print(f"Opening browser to: {vnc_url}")
+            qcrbox_base = self.qcrbox_url.replace('http://', '').replace('https://', '').split(':')[0]
+            vnc_url = f"http://{qcrbox_base}:{vnc_port}/vnc.html?path=vnc&autoconnect=true&resize=remote&reconnect=true&show_dot=true"
+            print(f"VNC URL: {vnc_url}")
             
             # Open browser to VNC URL
-            import subprocess
             webbrowser.open(vnc_url)
             
             return session_id

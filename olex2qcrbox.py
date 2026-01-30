@@ -312,6 +312,8 @@ class olex2qcrbox(PT):
     self.state.selected_command = command_name
     new_parameter_html = self.produce_parameter_html()
     gui_controller.update_parameter_panel(new_parameter_html)
+    # Update help file to show help for newly selected command
+    self.update_help_file()
 
 
   def set_parameter_state(self, command_id, parameter_name, value): 
@@ -524,6 +526,25 @@ class olex2qcrbox(PT):
       print(f"Command not found: {current_command}")
       return None
     
+    # Find the application object to get the VNC port
+    app_obj = next(
+      (app for app in self.state.applications 
+       if app.slug == command_obj.application and app.version == command_obj.version),
+      None
+    )
+    
+    if not app_obj:
+      print(f"Application not found: {command_obj.application} v{command_obj.version}")
+      return None
+    
+    # Extract VNC port from application
+    vnc_port = None
+    if hasattr(app_obj, 'gui_port') and app_obj.gui_port:
+      vnc_port = app_obj.gui_port
+      print(f"Found gui_port in application: {vnc_port}")
+    else:
+      print(f"[WARNING] No gui_port found in application object")
+    
     # Upload current CIF file
     print("Uploading CIF file for interactive session...")
     upload_result = self.auto_fill_cif_parameters()
@@ -588,11 +609,28 @@ class olex2qcrbox(PT):
       self.state.current_session_dataset_id = dataset_id
       self.state.is_interactive_session = True
       
-      # Construct VNC URL from stored qcrbox_url
-      qcrbox_base = self.qcrbox_url.replace('http://', '').replace('https://', '').split(':')[0]
-      vnc_url = f"http://{qcrbox_base}:12004/vnc.html?path=vnc&autoconnect=true&resize=remote&reconnect=true&show_dot=true"
+      # Construct VNC URL from application's gui_port
+      if not vnc_port:
+        print(f"[ERROR] No gui_port found for interactive application. Cannot connect to VNC session.")
+        print(f"[ERROR] The application must define a gui_port to support interactive sessions.")
+        # Clean up the session that was just created
+        try:
+          from qcrboxapiclient.api.interactive_sessions import close_interactive_session
+          print(f"Cleaning up session {session_id}...")
+          close_interactive_session.sync(client=self.qcrbox_adapter.client, id=session_id)
+        except Exception as cleanup_error:
+          print(f"Warning: Failed to clean up session: {cleanup_error}")
+        # Clean up state
+        self.state.current_session_id = None
+        self.state.current_calculation_id = None
+        self.state.current_session_dataset_id = None
+        self.state.is_interactive_session = False
+        gui_controller.update_run_button("Run Command", "#FFFFFF", True)
+        return None
       
-      print(f"Opening browser to: {vnc_url}")
+      qcrbox_base = self.qcrbox_url.replace('http://', '').replace('https://', '').split(':')[0]
+      vnc_url = f"http://{qcrbox_base}:{vnc_port}/vnc.html?path=vnc&autoconnect=true&resize=remote&reconnect=true&show_dot=true"
+      print(f"VNC URL: {vnc_url}")
       
       # Open browser to VNC URL
       import webbrowser
