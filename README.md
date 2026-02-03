@@ -1,6 +1,8 @@
 # Olex2 QCrBox Plugin
 
-A plugin for Olex2 that provides integration with the QCrBox API for running crystallographic calculations in the cloud.
+A plugin for Olex2 that provides integration with the QCrBox API for running crystallographic calculations from Olex2 in QCrBox
+
+The main QCrBox codebase is located [here](https://github.com/QCrBox/QCrBox).
 
 ## Features
 
